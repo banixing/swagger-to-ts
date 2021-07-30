@@ -1,4 +1,4 @@
-// TODO 有错误
+// TODO 待完善
 export const analysisDefinitionName = (definitionName: string): string[] => {
   let definitionNames: string[] = [];
   if (definitionName.includes("«") && definitionName.includes("»")) {

@@ -1,5 +1,5 @@
 import { Schema } from "swagger-schema-official";
-import ts from 'typescript';
+import ts from "typescript";
 
 /**
  * 生成Properties注释
@@ -39,6 +39,7 @@ export function createProperty(
   required?: boolean
 ) {
   // 'string' | 'number' | 'integer' | 'boolean' | 'array' | 'object' | 'file'
+  let typeGraph = "";
   let newSchemaType: any = schema.type;
   if (schema.type === "integer") {
     newSchemaType = "number";
@@ -46,36 +47,45 @@ export function createProperty(
   if (schema.type === "array") {
     if (schema.items) {
       const definition = formatSchemaRef((schema.items as Schema)["$ref"]);
-      newSchemaType = `${definition}[]`;
+      if (definition) {
+        newSchemaType = `${definition}[]`;
+        typeGraph = definition;
+      }
+      // TODO 异常处理
     } else {
       newSchemaType = "T[]";
     }
   }
-  if (schema.type === "object" || !schema.type && schema['$ref']) {
+  if (schema.type === "object" || (!schema.type && schema["$ref"])) {
     const definition = formatSchemaRef(schema["$ref"]);
     newSchemaType = `${definition}`;
+    typeGraph = newSchemaType;
   }
 
-  return (
+  const propertyStr =
     createPropertyDescription(schema.description) +
     `
-    ${propertiesName}${required ? ":" : "?:"} ${newSchemaType};
-    `
-  );
+  ${propertiesName}${required ? ":" : "?:"} ${newSchemaType};
+  `;
+  return { propertyStr, typeGraph };
 }
 
 export function createProperties(properties: Schema, required?: string[]) {
   let propertiesStr = "";
+  let typeGraphs = new Set();
   Object.entries(properties).forEach(([propertiesName, schema]) => {
-    const propertyStr = createProperty(
+    const { propertyStr, typeGraph } = createProperty(
       propertiesName,
       schema,
       (required || []).includes(propertiesName)
     );
     propertiesStr = propertiesStr + propertyStr;
+    if (typeGraph) {
+      typeGraphs.add(typeGraph);
+    }
   });
 
-  return propertiesStr;
+  return { propertiesStr, typeGraphs: [...typeGraphs] };
 }
 
 export function formatSchemaRef(ref?: string) {
@@ -84,7 +94,5 @@ export function formatSchemaRef(ref?: string) {
 }
 
 function createSynthesizedNode() {
-    const node = ts.factory.createNodeArray()
+  const node = ts.factory.createNodeArray();
 }
-
-

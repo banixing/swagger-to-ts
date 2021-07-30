@@ -8,11 +8,15 @@ import {
   BodyParameter,
 } from "swagger-schema-official";
 import _ from "lodash";
-import ts from "typescript";
+import ts, { textSpanIntersectsWith } from "typescript";
 import path from "path";
 import { analysisDefinitionName } from "./utils/analysisDefinitionName";
 import fs from "fs";
-import { createJsDocDescription, createProperties, formatSchemaRef } from "./utils/jsDoc";
+import {
+  createJsDocDescription,
+  createProperties,
+  formatSchemaRef,
+} from "./utils/jsDoc";
 
 type Method = "get" | "put" | "post" | "delete" | "options" | "head" | "patch";
 
@@ -23,7 +27,8 @@ export class Generator {
   spec: Spec;
   paths?: string[];
 
-  definitions: Set<string>;
+  definitionNames: Set<string>;
+  definitions: { [definitionsName: string]: Schema };
 
   filter: Filter = () => true;
 
@@ -32,7 +37,8 @@ export class Generator {
     if (paths?.length) {
       this.paths = [...paths];
     }
-    this.definitions = new Set();
+    this.definitionNames = new Set();
+    this.definitions = {};
   }
 
   generate() {
@@ -46,6 +52,14 @@ export class Generator {
     filterPaths.forEach(([url, swaggerPath]) => {
       this.generatePathAst(url, swaggerPath);
     });
+    // 简化分拆定义名
+    const newDefinitionNames = this.analysisDefinitions(this.definitionNames);
+    this.definitionNames.clear();
+    this.definitionNames = newDefinitionNames;
+    // 通过定义名找到定义
+    if (this.spec.definitions) {
+      this.filterDefinitions(this.definitionNames, this.spec.definitions);
+    }
   }
 
   /**
@@ -65,7 +79,7 @@ export class Generator {
   }
 
   /**
-   * 生成ApiAst
+   * 收集path使用到的定义
    * @param swaggerUrl
    * @param method
    * @param operation
@@ -100,7 +114,7 @@ export class Generator {
             const definition =
               schemaRef?.split("/")[schemaRef?.split("/").length - 1];
             // console.log("definition", definition);
-            this.definitions.add(definition || "");
+            this.definitionNames.add(definition || "");
           }
         });
       }
@@ -115,57 +129,72 @@ export class Generator {
           $ref: (successResponse as Reference).$ref,
         };
       }
-      // console.log(resSchema);
       const schemaRef = resSchema["$ref"];
-
       const definition = formatSchemaRef(schemaRef);
-
-      this.definitions.add(definition || "");
+      this.definitionNames.add(definition || "");
     }
   }
 
-  // TODO 分析定义
-  analysisDefinitions() {
-    const aaa: string[] = [];
-    this.definitions.forEach((definition) => {
-      if ("definition") {
-        const newDefinitionName = analysisDefinitionName(definition);
-        console.log('newDefinitionName', newDefinitionName)
-        aaa.push(...newDefinitionName);
+  // TODO 接口定义分析把嵌套的类型分拆
+  analysisDefinitions(definitionNames: Set<string>) {
+    const defNames: string[] = [];
+    definitionNames.forEach((definitionName) => {
+      if (definitionName) {
+        const newDefinitionName = analysisDefinitionName(definitionName);
+        defNames.push(...newDefinitionName);
       }
     });
-    const newDefinitions = new Set(aaa);
-    console.log('newDefinitions', newDefinitions)
-    return newDefinitions;
+    const newDefinitionNames = new Set(defNames);
+    return newDefinitionNames;
   }
+
   // TODO 找到定义
-  filterDefinitions() {
-    const newDefinitions = this.analysisDefinitions();
-    const definitions: Schema[] = [];
-
-    const specDefinitions = this.spec.definitions;
-
-    let newSpecDefinitions: [string, Schema][] = [];
-
-    if (specDefinitions) {
-      newSpecDefinitions = Object.entries(specDefinitions).filter(
-        ([definitionsName, schema]) => {
-          if (newDefinitions.has(definitionsName)) {
-            return true;
-          } else {
-            return false;
+  filterDefinitions(
+    definitionNames: Set<string>,
+    specDefinitions: {
+      [definitionsName: string]: Schema;
+    }
+  ) {
+    Object.entries(specDefinitions).forEach(([definitionsName, schema]) => {
+      if (definitionNames.has(definitionsName)) {
+        if (!this.definitions[definitionsName]) {
+          this.definitions[definitionsName] = schema;
+          // 找到schema的依赖
+          if (schema.properties) {
+            Object.entries(schema.properties).forEach(([propertyName, propertySchema])=> {
+              let refName = ''
+              if (Array.isArray(propertySchema.items)) {
+                // TODO 待处理
+              } else if (propertySchema.items && propertySchema.items['$ref']) {
+                refName = propertySchema.items['$ref']
+              }
+              if (propertySchema['$ref']) {
+                refName = propertySchema['$ref']
+              }
+              if (refName && this.spec.definitions) {
+                const newRefName = formatSchemaRef(refName) || ''
+                const definitionNames = analysisDefinitionName(newRefName)
+                definitionNames.forEach(definitionsName => {
+                  this.definitionNames.add(definitionsName)
+                })
+                
+                this.filterDefinitions(new Set(definitionNames), this.spec.definitions)
+              }
+            })
           }
         }
-      );
-    }
-    return newSpecDefinitions;
+      }
+    });
   }
-  // TODO 生成定义
-  generateDefinitions() {
-    const definitions = this.filterDefinitions();
-    !fs.existsSync("./lib") && fs.mkdirSync("./lib");
+  
 
-    definitions.forEach(([name, schema]) => {
+  // TODO 生成定义
+  generateDefinitions(definitions: {
+    [definitionsName: string]: Schema;
+  }) {
+   
+    !fs.existsSync("./lib") && fs.mkdirSync("./lib");
+    Object.entries(definitions).forEach(([name, schema]) => {
       // console.log(name, schema)
       let interfaceDocStr = "";
       interfaceDocStr += createJsDocDescription(schema);
@@ -175,7 +204,12 @@ export class Generator {
         `;
 
       if (schema.properties) {
-        interfaceDocStr += createProperties(schema.properties, schema.required);
+        const {propertiesStr, typeGraphs} = createProperties(schema.properties, schema.required)
+        interfaceDocStr += propertiesStr;
+        typeGraphs.forEach(typeGraph => {
+          interfaceDocStr = `import { ${typeGraph} } from './${typeGraph}';\n` + interfaceDocStr
+        })
+        
       }
       interfaceDocStr += "}\n";
 

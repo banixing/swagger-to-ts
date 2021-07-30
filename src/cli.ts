@@ -11,7 +11,10 @@ function run() {
     const spec = await res.json();
     const gen = new Generator(spec, paths);
     gen.generate();
-    gen.generateDefinitions();
+    const definitions = gen.definitions
+    gen.generateDefinitions(definitions)
+    // gen.getAllDefinitions()
+    // gen.generateDefinitions();
     
 
     // console.log('definitions', gen.filterDefinitions())
